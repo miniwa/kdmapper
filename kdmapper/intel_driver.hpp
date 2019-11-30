@@ -77,6 +77,7 @@ namespace intel_driver
 	uint64_t GetKernelModuleExport(HANDLE device_handle, uint64_t kernel_module_base, const std::string& function_name);
 	bool GetNtGdiDdDDIReclaimAllocations2KernelInfo(HANDLE device_handle, uint64_t* out_kernel_function_ptr, uint64_t* out_kernel_original_function_address);
 	bool ClearMmUnloadedDrivers(HANDLE device_handle);
+	bool GetDriverObjectAddress(HANDLE device_handle, uint64_t* driver_object_address);
 
 	template<typename T, typename ...A>
 	bool CallKernelFunction(HANDLE device_handle, T* out_result, uint64_t kernel_function_address, const A ...arguments)

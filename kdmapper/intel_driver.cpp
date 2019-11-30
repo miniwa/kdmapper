@@ -299,11 +299,31 @@ bool intel_driver::GetNtGdiDdDDIReclaimAllocations2KernelInfo(HANDLE device_hand
 
 bool intel_driver::ClearMmUnloadedDrivers(HANDLE device_handle)
 {
+	uint64_t driver_object = 0;
+	if (!GetDriverObjectAddress(device_handle, &driver_object)) {
+		return false;
+	}
+
+	uint64_t driver_section = 0;
+	if (!ReadMemory(device_handle, driver_object + 0x28, &driver_section, sizeof(driver_section)))
+		return false;
+
+	UNICODE_STRING us_driver_base_dll_name = { 0 };
+	if (!ReadMemory(device_handle, driver_section + 0x58, &us_driver_base_dll_name, sizeof(us_driver_base_dll_name)))
+		return false;
+
+	us_driver_base_dll_name.Length = 0;
+	if (!WriteMemory(device_handle, driver_section + 0x58, &us_driver_base_dll_name, sizeof(us_driver_base_dll_name)))
+		return false;
+
+	return true;
+}
+
+bool intel_driver::GetDriverObjectAddress(HANDLE device_handle, uint64_t* driver_object_address) {
 	ULONG buffer_size = 0;
 	void* buffer = nullptr;
 
 	NTSTATUS status = NtQuerySystemInformation(static_cast<SYSTEM_INFORMATION_CLASS>(nt::SystemExtendedHandleInformation), buffer, buffer_size, &buffer_size);
-
 	while (status == nt::STATUS_INFO_LENGTH_MISMATCH)
 	{
 		VirtualFree(buffer, 0, MEM_RELEASE);
@@ -319,13 +339,10 @@ bool intel_driver::ClearMmUnloadedDrivers(HANDLE device_handle)
 	}
 
 	uint64_t object = 0;
-
 	auto system_handle_inforamtion = static_cast<nt::PSYSTEM_HANDLE_INFORMATION_EX>(buffer);
-
 	for (auto i = 0u; i < system_handle_inforamtion->HandleCount; ++i)
 	{
 		const nt::SYSTEM_HANDLE current_system_handle = system_handle_inforamtion->Handles[i];
-
 		if (current_system_handle.UniqueProcessId != reinterpret_cast<HANDLE>(static_cast<uint64_t>(GetCurrentProcessId())))
 			continue;
 
@@ -335,36 +352,16 @@ bool intel_driver::ClearMmUnloadedDrivers(HANDLE device_handle)
 			break;
 		}
 	}
-
 	VirtualFree(buffer, 0, MEM_RELEASE);
 
 	if (!object)
 		return false;
 
 	uint64_t device_object = 0;
-
 	if (!ReadMemory(device_handle, object + 0x8, &device_object, sizeof(device_object)))
 		return false;
 
-	uint64_t driver_object = 0;
-
-	if (!ReadMemory(device_handle, device_object + 0x8, &driver_object, sizeof(driver_object)))
+	if (!ReadMemory(device_handle, device_object + 0x8, driver_object_address, sizeof(driver_object_address)))
 		return false;
-
-	uint64_t driver_section = 0;
-
-	if (!ReadMemory(device_handle, driver_object + 0x28, &driver_section, sizeof(driver_section)))
-		return false;
-
-	UNICODE_STRING us_driver_base_dll_name = { 0 };
-
-	if (!ReadMemory(device_handle, driver_section + 0x58, &us_driver_base_dll_name, sizeof(us_driver_base_dll_name)))
-		return false;
-
-	us_driver_base_dll_name.Length = 0;
-
-	if (!WriteMemory(device_handle, driver_section + 0x58, &us_driver_base_dll_name, sizeof(us_driver_base_dll_name)))
-		return false;
-
 	return true;
 }

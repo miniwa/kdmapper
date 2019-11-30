@@ -56,5 +56,8 @@
     <ClInclude Include="intel_driver_resource.hpp">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="driver_args.hpp">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

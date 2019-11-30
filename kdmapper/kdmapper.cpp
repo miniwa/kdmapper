@@ -1,4 +1,5 @@
 #include "kdmapper.hpp"
+#include "driver_args.hpp"
 
 uint64_t kdmapper::MapDriver(HANDLE iqvw64e_device_handle, const std::string& driver_path)
 {
@@ -25,9 +26,10 @@ uint64_t kdmapper::MapDriver(HANDLE iqvw64e_device_handle, const std::string& dr
 	}
 
 	const uint32_t image_size = nt_headers->OptionalHeader.SizeOfImage;
+	const uint32_t image_and_args_size = image_size + sizeof(SVKE_DRIVER_ARGS);
 
-	void* local_image_base = VirtualAlloc(nullptr, image_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-	uint64_t kernel_image_base = intel_driver::AllocatePool(iqvw64e_device_handle, nt::NonPagedPool, image_size);
+	void* local_image_base = VirtualAlloc(nullptr, image_and_args_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+	uint64_t kernel_image_base = intel_driver::AllocatePool(iqvw64e_device_handle, nt::NonPagedPool, image_and_args_size);
 
 	do
 	{
@@ -40,11 +42,9 @@ uint64_t kdmapper::MapDriver(HANDLE iqvw64e_device_handle, const std::string& dr
 		std::cout << "[+] Image base has been allocated at 0x" << reinterpret_cast<void*>(kernel_image_base) << std::endl;
 
 		// Copy image headers
-
 		memcpy(local_image_base, raw_image.data(), nt_headers->OptionalHeader.SizeOfHeaders);
 
 		// Copy image sections
-
 		const PIMAGE_SECTION_HEADER current_image_section = IMAGE_FIRST_SECTION(nt_headers);
 
 		for (auto i = 0; i < nt_headers->FileHeader.NumberOfSections; ++i)
@@ -54,46 +54,53 @@ uint64_t kdmapper::MapDriver(HANDLE iqvw64e_device_handle, const std::string& dr
 		}
 
 		// Resolve relocs and imports
-
 		RelocateImageByDelta(portable_executable::GetRelocs(local_image_base), kernel_image_base - nt_headers->OptionalHeader.ImageBase);
-
 		if (!ResolveImports(iqvw64e_device_handle, portable_executable::GetImports(local_image_base)))
 		{
 			std::cout << "[-] Failed to resolve imports" << std::endl;
 			break;
 		}
 
-		// Write fixed image to kernel
+		// Get driver object
+		uint64_t driver_object_address = 0;
+		if (!intel_driver::GetDriverObjectAddress(iqvw64e_device_handle, &driver_object_address))
+		{
+			std::cout << "[-] Failed to retrieve driver object" << std::endl;
+			break;
+		}
 
-		if (!intel_driver::WriteMemory(iqvw64e_device_handle, kernel_image_base, local_image_base, image_size))
+		// Setup args structure
+		uint8_t* local_args_base = reinterpret_cast<uint8_t*>(local_image_base) + image_size;
+		SVKE_DRIVER_ARGS args = { 0 };
+		args.sizeOfStruct = sizeof(args);
+		args.pImageBase = reinterpret_cast<PVOID>(kernel_image_base);
+		args.pVulnerableDriverObject = reinterpret_cast<SVKE_DRIVER_ARGS*>(driver_object_address);
+		memcpy(local_args_base, &args, sizeof(args));
+
+		// Write fixed image to kernel
+		if (!intel_driver::WriteMemory(iqvw64e_device_handle, kernel_image_base, local_image_base, image_and_args_size))
 		{
 			std::cout << "[-] Failed to write local image to remote image" << std::endl;
 			break;
 		}
-
 		VirtualFree(local_image_base, 0, MEM_RELEASE);
 
 		// Call driver entry point
-
+		uint64_t kernel_args_base = kernel_image_base + image_size;
 		const uint64_t address_of_entry_point = kernel_image_base + nt_headers->OptionalHeader.AddressOfEntryPoint;
-
 		std::cout << "[<] Calling DriverEntry 0x" << reinterpret_cast<void*>(address_of_entry_point) << std::endl;
-
+		
 		NTSTATUS status = 0;
-
-		if (!intel_driver::CallKernelFunction(iqvw64e_device_handle, &status, address_of_entry_point))
+		if (!intel_driver::CallKernelFunction(iqvw64e_device_handle, &status, address_of_entry_point, kernel_args_base))
 		{
 			std::cout << "[-] Failed to call driver entry" << std::endl;
 			break;
 		}
-
 		std::cout << "[+] DriverEntry returned 0x" << std::hex << std::setw(8) << std::setfill('0') << std::uppercase << status << std::nouppercase << std::dec << std::endl;
 
 		// Erase PE headers
-
 		intel_driver::SetMemory(iqvw64e_device_handle, kernel_image_base, 0, nt_headers->OptionalHeader.SizeOfHeaders);
 		return kernel_image_base;
-
 	} while (false);
 
 	VirtualFree(local_image_base, 0, MEM_RELEASE);
